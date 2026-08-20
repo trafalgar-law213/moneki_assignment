@@ -133,6 +133,15 @@ def test_live_aov_direction(monkeypatch):
     assert expected in text, f"方向应为「{expected}」（7月 {jul} vs 6月 {jun}），实际回答: {text}"
 
 
+def test_live_store_name_verbatim(monkeypatch):
+    """店名必须原样使用数据库英文名（如 Super Souper），不得翻译成中文（防店名/商品名混淆）。"""
+    calls = _record(monkeypatch)
+    text, _ = asyncio.run(_ask("Super Souper 六月营业额是多少？"))
+
+    assert "Super Souper" in text, f"回答未原样使用英文店名，实际回答: {text}"
+    assert _nums(text) <= _derivable(_result_nums(calls))
+
+
 # ---------- 追问 + 兜底 ----------
 
 def test_live_followup_may(monkeypatch):
