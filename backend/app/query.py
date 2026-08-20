@@ -298,9 +298,8 @@ def metrics_by(
         params_extra.append(category)
 
     where, params = _where(start, end, store_ids, " AND ".join(extra) if extra else "")
-    params = params[:2] + params_extra + params[2:]
-    # 重新拼参数顺序：_where 里 params = [start, end, *store_ids]，extra 参数需插在 store_ids 前
-    params = [start, end] + params_extra + (params[2:] if len(params) > 2 else [])
+    # _where 参数顺序 = [start, end, *store_ids]，extra 子句拼在其后，参数直接追加即可
+    params.extend(params_extra)
 
     label_sql = _GROUP_LABELS.get(granularity, "NULL")
     order_sql = "s.date ASC" if order == "asc" else "revenue DESC"
