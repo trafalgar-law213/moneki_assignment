@@ -85,4 +85,4 @@ cd ../frontend && npm install && npm run build
    - AI mock 8：「回答中每个数字 ⊆ 工具结果数字集」+ 兜底 + 追问（mock LLM、工具真执行）
    - AI live 6：真 key 打真模型，三样例问题与库内锚点对账（无 key 自动 skip）
 3. **数据隔离四层**：LLM 只能经白名单工具拿聚合结果，全链路不存在返回原始行的工具；系统提示词只注入元信息（日期边界/门店名/品类）
-4. **开发可审计**：DEVLOG.md 全程记录每步做什么/测什么/错在哪；git 阶梯状提交历史（feat/fix/docs/test 前缀 + 中文描述）
+4. **开发可审计**：git 阶梯状提交历史（feat/fix/docs/test 前缀 + 中文描述），测试分层守护每个模块

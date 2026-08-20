@@ -108,8 +108,6 @@ cd backend && .venv/bin/pytest tests/ -q                     # Linux/macOS
 ├── data/            # 数据副本（清洗只碰副本；题目夹只读）
 ├── backend/         # FastAPI：pipeline 清洗 / query 唯一取数层 / api 看板+聊天 / ai 工具+客户端 / tests
 ├── frontend/        # React+Vite：组件各自取数，事件总线联动（AI 区间 → 看板跳转）
-├── docs/            # DEVELOPMENT 开发手册 / DECISIONS 决策记录 / PLAN 规划
-├── DEVLOG.md        # 开发日志（每步做了什么、测了什么、bug 台账）
 ├── AI_USAGE.md      # AI 使用说明（题目必交）
 └── DEMO.md          # 演示脚本（题目必交）
 ```
