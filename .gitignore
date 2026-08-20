@@ -1,0 +1,26 @@
+# 题目原文件夹（只读，不入库）
+moneki-fullstack-assignment-main/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Node
+node_modules/
+frontend/dist/
+
+# 管线生成物（可由 data/ 重建）
+backend/data/*.db
+backend/data/*.db-*
+backend/data/quality_report.json
+
+# 环境变量（含 API key，严禁入库）
+.env
+.env.local
+
+# 系统
+.DS_Store
+Thumbs.db
