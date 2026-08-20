@@ -75,23 +75,65 @@ def build_system(conn) -> str:
     )
 
 
-def _assistant_dict(msg) -> dict:
-    """把 openai SDK 的 message 转成可回传的 dict（保留 reasoning_content 与 tool_calls）。"""
-    d = {"role": "assistant", "content": msg.content or ""}
-    tcs = getattr(msg, "tool_calls", None)
-    if tcs:
-        d["tool_calls"] = [
-            {
-                "id": tc.id,
-                "type": "function",
-                "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-            }
-            for tc in tcs
-        ]
-    rc = getattr(msg, "reasoning_content", None)
-    if rc:
-        d["reasoning_content"] = rc  # V4 Pro 要求回传，否则 400
-    return d
+async def _streamed_completion(client, msgs: list[dict], with_tools: bool, out: dict) -> AsyncIterator[dict]:
+    """一次流式补全：逐块转发 reasoning（thinking 事件）与正文（delta 事件），
+    同时合并分块到达的 tool_calls（index → id/name/arguments 拼接）。
+    结束后把组装好的 assistant 消息（含 reasoning_content，V4 Pro 要求）写入 out["assistant_msg"]。
+    """
+    content_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    tc_map: dict[int, dict] = {}
+
+    stream = await client.chat.completions.create(
+        model=ai_client.MODEL,
+        messages=msgs,
+        tools=ai_tools.TOOL_DEFS if with_tools else None,
+        stream=True,
+    )
+    async for chunk in stream:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        if delta is None:
+            continue
+        rc = getattr(delta, "reasoning_content", None)
+        if rc:
+            reasoning_parts.append(rc)
+            yield {"type": "thinking", "data": rc}
+        content = getattr(delta, "content", None)
+        if content:
+            content_parts.append(content)
+            yield {"type": "delta", "data": content}
+        for raw_tc in getattr(delta, "tool_calls", None) or []:
+            # 归一化：openai SDK 流式返回 pydantic 对象（属性访问），mock 测试返回 dict → 统一成 dict
+            if isinstance(raw_tc, dict):
+                tc = raw_tc
+            else:
+                fn = getattr(raw_tc, "function", None)
+                tc = {
+                    "index": getattr(raw_tc, "index", 0),
+                    "id": getattr(raw_tc, "id", None),
+                    "function": {
+                        "name": getattr(fn, "name", None) if fn else None,
+                        "arguments": getattr(fn, "arguments", None) if fn else None,
+                    },
+                }
+            idx = tc.get("index", 0) or 0
+            cur = tc_map.setdefault(
+                idx, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+            )
+            if tc.get("id"):
+                cur["id"] += tc["id"]
+            fn = tc.get("function") or {}
+            cur["function"]["name"] += fn.get("name") or ""
+            cur["function"]["arguments"] += fn.get("arguments") or ""
+
+    assistant_msg: dict = {"role": "assistant", "content": "".join(content_parts)}
+    if tc_map:
+        assistant_msg["tool_calls"] = [tc_map[i] for i in sorted(tc_map)]
+    if reasoning_parts:
+        assistant_msg["reasoning_content"] = "".join(reasoning_parts)
+    out["assistant_msg"] = assistant_msg
 
 
 def _tool_summary(result: dict) -> str:
@@ -110,7 +152,8 @@ def _tool_summary(result: dict) -> str:
 async def run_chat(messages: list[dict]) -> AsyncIterator[dict]:
     """核心问答流程（可直接测试的异步生成器，产出 SSE 事件 dict）。
 
-    事件：tool（工具执行状态+图表联动 meta）/ delta（流式文本）/ done（更新后的完整历史）。
+    事件：thinking（模型思考过程，流式）/ tool（工具执行状态+图表联动 meta）
+    / delta（回答正文，流式）/ done（更新后的完整历史）。
     """
     conn = dbmod.get_conn()
     try:
@@ -118,16 +161,13 @@ async def run_chat(messages: list[dict]) -> AsyncIterator[dict]:
         msgs = [{"role": "system", "content": build_system(conn)}] + messages
 
         for _ in range(MAX_TOOL_ROUNDS):
-            resp = await client.chat.completions.create(
-                model=ai_client.MODEL, messages=msgs, tools=ai_tools.TOOL_DEFS
-            )
-            msg = resp.choices[0].message
-            assistant_msg = _assistant_dict(msg)
+            out: dict = {}
+            async for ev in _streamed_completion(client, msgs, with_tools=True, out=out):
+                yield ev
+            assistant_msg = out["assistant_msg"]
 
             if not assistant_msg.get("tool_calls"):
-                content = msg.content or ""
-                if content:
-                    yield {"type": "delta", "data": content}
+                # 无工具调用 = 最终回答（正文已按块以 delta 流出）
                 # done 回传完整历史（去掉 system）：含本轮工具调用的 assistant 消息与工具结果，
                 # 前端保存后全量回传，追问上下文（"那五月呢"）才成立
                 yield {"type": "done", "data": {"messages": msgs[1:] + [assistant_msg]}}
@@ -153,20 +193,11 @@ async def run_chat(messages: list[dict]) -> AsyncIterator[dict]:
                     "content": json.dumps(result, ensure_ascii=False),
                 })
 
-        # 工具轮次用尽 → 不带工具的最终流式回答
-        stream = await client.chat.completions.create(
-            model=ai_client.MODEL, messages=msgs, stream=True
-        )
-        final_parts: list[str] = []
-        async for chunk in stream:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-            if delta and delta.content:
-                final_parts.append(delta.content)
-                yield {"type": "delta", "data": delta.content}
-        final_msg = {"role": "assistant", "content": "".join(final_parts)}
-        yield {"type": "done", "data": {"messages": msgs[1:] + [final_msg]}}
+        # 工具轮次用尽 → 不带工具的最后一轮流式回答
+        out = {}
+        async for ev in _streamed_completion(client, msgs, with_tools=False, out=out):
+            yield ev
+        yield {"type": "done", "data": {"messages": msgs[1:] + [out["assistant_msg"]]}}
     finally:
         conn.close()
 

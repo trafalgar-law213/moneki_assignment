@@ -45,8 +45,40 @@ class FakeResp:
         self.choices = [type("C", (), {"message": message})()]
 
 
+class FakeChunk:
+    """流式分块：delta 携带 content / reasoning_content / tool_calls（合并练习用）。"""
+
+    def __init__(self, delta=None, finish_reason=None):
+        self.choices = [type("C", (), {"delta": delta, "finish_reason": finish_reason})()]
+
+
+def _message_to_chunks(msg):
+    """把脚本化的 FakeMessage 转成流式分块序列：
+    reasoning 整块 → tool_calls 逐调用分块 → 正文按 12 字符切开（练习 chat.py 的分块合并）。"""
+    if msg.reasoning_content:
+        yield FakeChunk(delta=type("D", (), {
+            "content": None, "reasoning_content": msg.reasoning_content, "tool_calls": None})())
+    if msg.tool_calls:
+        for i, tc in enumerate(msg.tool_calls):
+            yield FakeChunk(delta=type("D", (), {
+                "content": None, "reasoning_content": None,
+                "tool_calls": [{"index": i, "id": tc.id, "type": "function",
+                                "function": {"name": tc.function.name, "arguments": tc.function.arguments}}]})())
+        yield FakeChunk(finish_reason="tool_calls")
+    else:
+        text = msg.content or ""
+        if not text:
+            yield FakeChunk(finish_reason="stop")
+        for i in range(0, len(text), 12):
+            piece = text[i:i + 12]
+            yield FakeChunk(
+                delta=type("D", (), {
+                    "content": piece, "reasoning_content": None, "tool_calls": None})(),
+                finish_reason="stop" if i + 12 >= len(text) else None)
+
+
 class FakeCompletions:
-    """script：[(callable(msgs) -> FakeMessage), ...]，流式步骤返回异步生成器。"""
+    """script：[(callable(msgs) -> FakeMessage), ...]；stream=True 时把消息转成分块流。"""
 
     def __init__(self, script):
         self.script = list(script)
@@ -57,7 +89,7 @@ class FakeCompletions:
         step = self.script.pop(0)
         if kwargs.get("stream"):
             async def _gen():
-                async for chunk in step(kwargs["messages"]):
+                for chunk in _message_to_chunks(step(kwargs["messages"])):
                     yield chunk
             return _gen()
         return FakeResp(step(kwargs["messages"]))
