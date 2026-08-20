@@ -8,7 +8,7 @@ export default function TopProducts({ q }) {
   const [rows, setRows] = useState([])
 
   useEffect(() => {
-    getJSON(`/api/dashboard/top-products${q}&limit=10`).then(setRows).catch(() => setRows([]))
+    getJSON(`/api/dashboard/top-products${q ? `${q}&` : '?'}limit=10`).then(setRows).catch(() => setRows([]))
   }, [q])
 
   useEffect(() => {

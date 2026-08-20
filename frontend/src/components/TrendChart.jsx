@@ -2,30 +2,19 @@ import { useEffect, useRef, useState } from 'react'
 import * as echarts from 'echarts'
 import { getJSON, fmtMoney } from '../api'
 
-// 营业额趋势（柱）+ 客单价（线，双轴）+ 异常日标记点
+// 营业额趋势（柱）+ 客单价（线，双轴）；异常日明细在右侧「异常预警」卡片，不在此图标记
 export default function TrendChart({ q }) {
   const ref = useRef(null)
   const [data, setData] = useState(null)
-  const [anom, setAnom] = useState(null)
 
   useEffect(() => {
     getJSON(`/api/dashboard/summary${q}`).then(setData).catch(() => setData(null))
-    getJSON(`/api/dashboard/anomalies${q}`).then(setAnom).catch(() => setAnom(null))
   }, [q])
 
   useEffect(() => {
     if (!ref.current || !data) return
     const chart = echarts.init(ref.current)
     const dates = data.by_day.map((d) => d.date)
-
-    const markPoints = (anom?.days || []).map((a) => ({
-      coord: [a.date, a.revenue],
-      value: a.direction,
-      symbol: 'pin',
-      symbolSize: 30,
-      itemStyle: { color: a.direction === '偏高' ? '#f85149' : '#f0883e' },
-      label: { formatter: `${a.store_name}`, fontSize: 10, color: '#e6edf3' },
-    }))
 
     chart.setOption({
       backgroundColor: 'transparent',
@@ -72,7 +61,6 @@ export default function TrendChart({ q }) {
               { offset: 1, color: 'rgba(88,166,255,.15)' },
             ]),
           },
-          markPoint: { data: markPoints, animation: false },
         },
         {
           name: '客单价',
@@ -92,7 +80,7 @@ export default function TrendChart({ q }) {
       window.removeEventListener('resize', onResize)
       chart.dispose()
     }
-  }, [data, anom])
+  }, [data])
 
   return <div ref={ref} className="chart" />
 }
