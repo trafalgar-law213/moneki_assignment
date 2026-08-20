@@ -16,17 +16,26 @@ export default function ChatPanel() {
   const [chips, setChips] = useState([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [thinking, setThinking] = useState('')
   const [input, setInput] = useState('')
   const boxRef = useRef(null)
 
   const send = async (question) => {
     const text = (question ?? input).trim()
-    if (!text || busy) return
+    if (!text) return
+    if (busy) {
+      // 其他组件代发（异常卡按钮）时 AI 可能还在答上一题：明确提示，不静默忽略
+      setNotice('AI 正在回答上一个问题，请稍候再试')
+      return
+    }
     setInput('')
     setBusy(true)
     setError('')
+    setNotice('')
     setChips([])
     setStream('')
+    setThinking('')
     const messages = [...history, { role: 'user', content: text }]
     setHistory(messages)
     try {
@@ -37,11 +46,14 @@ export default function ChatPanel() {
           if (ev.data.meta && ev.data.meta.start && ev.data.meta.end) {
             emit('linkage', ev.data.meta)
           }
+        } else if (ev.type === 'thinking') {
+          setThinking((t) => t + ev.data)
         } else if (ev.type === 'delta') {
           setStream((s) => s + ev.data)
         } else if (ev.type === 'done') {
           setHistory(ev.data.messages)
           setStream('')
+          setThinking('')
         } else if (ev.type === 'error') {
           setError(ev.data.message || 'AI 服务暂时不可用')
         }
@@ -53,14 +65,14 @@ export default function ChatPanel() {
     }
   }
 
-  // 其他组件（异常卡）通过事件总线让聊天面板发问；依赖 history 保证闭包不过期
-  useEffect(() => on('chat:ask', (q) => send(q)), [history])
+  // 其他组件（异常卡）通过事件总线让聊天面板发问；依赖 history+busy 保证闭包不过期
+  useEffect(() => on('chat:ask', (q) => send(q)), [history, busy])
 
   // 自动滚到底部
   useEffect(() => {
     const box = boxRef.current
     if (box) box.scrollTop = box.scrollHeight
-  }, [history, stream, chips, busy, error])
+  }, [history, stream, chips, thinking, notice, busy, error])
 
   const onKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -108,7 +120,19 @@ export default function ChatPanel() {
         {chips.map((c, i) => (
           <div key={i} className={`tool-chip${busy ? ' busy' : ''}`}>{c.summary}</div>
         ))}
+        {busy && !stream && (
+          <div className="thinking">
+            <div className="thinking-title">🤔 正在思考…</div>
+            {thinking && (
+              <details className="thinking-detail" open>
+                <summary>查看思考过程（流式）</summary>
+                <div className="thinking-body">{thinking}</div>
+              </details>
+            )}
+          </div>
+        )}
         {stream && <div className="msg ai">{stream}<span className="cursor" /></div>}
+        {notice && <div className="msg notice">{notice}</div>}
         {error && <div className="msg err">{error}</div>}
         {history.length === 0 && !busy && (
           <div className="msg ai">你好，我是经营数据助手。可以直接问我数据问题，例如「牛肉poke 六月卖了多少钱？」—— 回答的数字都来自真实数据库查询，并会同步联动左侧图表区间。</div>

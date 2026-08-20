@@ -12,7 +12,7 @@ export async function getJSON(path) {
 }
 
 /**
- * SSE 流式问答。onEvent 收到 {type: 'tool'|'delta'|'done'|'error', data}。
+ * SSE 流式问答。onEvent 收到 {type: 'thinking'|'tool'|'delta'|'done'|'error', data}。
  * 返回 done 事件携带的完整历史（含 reasoning_content / tool_calls / 工具结果），
  * 前端原样保存，下一次请求全量回传 —— 追问上下文由此成立。
  */
