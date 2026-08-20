@@ -1,0 +1,11 @@
+# 一键部署：服务器上 docker compose up -d --build
+# 前置：在 backend/.env 填好 DEEPSEEK_API_KEY（gitignore，运行时注入，绝不进镜像）
+services:
+  pokeone:
+    build: .
+    container_name: pokeone
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    restart: unless-stopped

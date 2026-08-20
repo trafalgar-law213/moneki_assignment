@@ -27,6 +27,16 @@ npm run build                    # 产物 dist/ 由后端直接托管
 > 开发模式：后端跑 8000，前端 `npm run dev`（vite 已代理 `/api` → 8000）。
 > 依赖安装也可用 uv：`uv venv && uv pip install -r requirements.txt`。
 
+## Docker 一键部署（生产）
+
+```bash
+docker compose up -d --build
+# 访问 http://服务器IP:8000
+```
+
+- 前置：`backend/.env` 填好 `DEEPSEEK_API_KEY`（gitignore 文件，运行时经 compose `env_file` 注入，**绝不进镜像**）
+- 单镜像多阶段构建：node 阶段构建前端 → python 阶段运行 FastAPI 并托管 dist；容器启动时若数据库缺失，自动清洗 `data/*.csv` 建库（幂等）
+
 ## 功能
 
 **看板**（第一关 + 加分）

@@ -1,0 +1,22 @@
+# 构建上下文瘦身 + 红线保障（.env 与生成物绝不进镜像）
+.git
+moneki-fullstack-assignment-main/
+**/__pycache__/
+*.py[cod]
+**/.venv/
+**/venv/
+**/.pytest_cache/
+**/node_modules/
+frontend/dist/
+backend/.env
+backend/data/
+backend/tests/
+docs/
+README.md
+AI_USAGE.md
+DEMO.md
+DEVLOG.md
+CLAUDE.md
+Dockerfile
+docker-compose.yml
+.dockerignore
