@@ -230,3 +230,52 @@ html, body {
 .btn-link:hover { text-decoration: underline; }
 
 .footer-note { color: var(--muted); font-size: 11px; margin-top: 14px; line-height: 1.7; }
+
+/* ---------- 登录门（公网访问保护） ---------- */
+
+.boot-screen { color: var(--muted); padding: 80px 0; text-align: center; }
+
+.login-gate {
+  min-height: calc(100vh - 60px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-card {
+  width: 320px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.login-brand h1 { margin: 0; font-size: 22px; letter-spacing: 0.06em; }
+.login-brand p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+
+.login-card input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 14px;
+}
+.login-card input:focus { outline: 1px solid var(--accent); }
+
+.login-card button {
+  background: var(--accent);
+  border: none;
+  color: #04121f;
+  font-weight: 700;
+  border-radius: 8px;
+  padding: 10px 0;
+  cursor: pointer;
+  font-size: 14px;
+}
+.login-card button:disabled { opacity: .45; cursor: not-allowed; }
+
+.login-err { margin: 0; color: var(--red); font-size: 12px; }
+.login-tip { margin: 0; color: var(--muted); font-size: 11px; text-align: center; }

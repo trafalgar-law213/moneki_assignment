@@ -12,7 +12,8 @@ from fastapi.staticfiles import StaticFiles
 
 from . import db as dbmod
 from . import pipeline
-from .api import dashboard
+from . import security
+from .api import auth, dashboard
 
 # chat 路由在 Step 4 接入（解耦：dashboard 不依赖 chat）
 try:
@@ -38,8 +39,12 @@ app.add_middleware(
 )
 
 app.include_router(dashboard.router)
+app.include_router(auth.router)
 if _HAS_CHAT:
     app.include_router(chat.router)
+
+# 公网访问保护（决策 D12）：未配置 ACCESS_PASSWORD 时完全透明放行
+app.middleware("http")(security.access_control)
 
 # 前端构建产物托管（frontend/dist 存在时才挂载）
 DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"

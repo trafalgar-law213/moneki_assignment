@@ -36,6 +36,7 @@ docker compose up -d --build
 
 - 前置：`backend/.env` 填好 `DEEPSEEK_API_KEY`（gitignore 文件，运行时经 compose `env_file` 注入，**绝不进镜像**）
 - 单镜像多阶段构建：node 阶段构建前端 → python 阶段运行 FastAPI 并托管 dist；容器启动时若数据库缺失，自动清洗 `data/*.csv` 建库（幂等）
+- 公网访问保护（可选）：在 `backend/.env` 加一行 `ACCESS_PASSWORD=你的口令` 并重建容器，即开启登录页 + AI 接口双层限流（单 IP 每分钟 5 次 / 全站每天 200 次，`RATE_PER_MIN` / `RATE_GLOBAL_PER_DAY` 可调）；**不设置则保护整体关闭**（本地开发默认如此，自动化测试不受影响）
 
 ## 功能
 
@@ -72,13 +73,14 @@ cd backend && .venv/Scripts/python.exe -m pytest tests/ -q   # Windows
 cd backend && .venv/bin/pytest tests/ -q                     # Linux/macOS
 ```
 
-56 个测试分四层（live 测试无 key 自动 skip）：
+65 个测试分五层（live 测试无 key 自动 skip）：
 | 层 | 文件 | 守护什么 |
 |---|---|---|
 | 清洗 | test_pipeline.py ×27 | 8 类脏数据规则逐一断言 + 幂等重跑 |
 | 看板 | test_dashboard.py ×15 | 接口数字与手工期望/直接 SQL 对账、异常算法定向测试、非法参数 400 |
 | AI mock | test_ai_consistency.py ×8 | 「回答中每个数字 ⊆ 工具结果数字集」+ 兜底不编造 + 追问历史回传（mock LLM、工具真执行） |
 | AI live | test_ai_live.py ×6 | 真 key 打真模型，三样例问题数字与库内锚点对账（约 1~3 分钟） |
+| 安全 | test_security.py ×9 | 口令登录/HMAC cookie 会话防伪造/401 拦截/聊天接口双层限流（未设口令时保护关闭） |
 
 ## 技术选型理由
 

@@ -8,13 +8,23 @@ import TopProducts from './components/TopProducts'
 import StoreCompare from './components/StoreCompare'
 import AnomalyAlert from './components/AnomalyAlert'
 import ChatPanel from './components/ChatPanel'
+import LoginGate from './components/LoginGate'
 
 export default function App() {
   const [meta, setMeta] = useState(null)
   const [filter, setFilter] = useState({ start: '', end: '', storeId: '' })
+  const [authed, setAuthed] = useState(null) // null=检测中 / true=已登录 / false=需口令
 
   useEffect(() => {
     getJSON('/api/meta').then(setMeta).catch((e) => console.error(e))
+  }, [])
+
+  // 公网保护（决策 D12）：启动时检查会话；任何接口 401 → 切换到登录页
+  useEffect(() => {
+    getJSON('/api/auth/check')
+      .then((r) => setAuthed(!!r.ok))
+      .catch(() => setAuthed(false))
+    return on('auth:required', () => setAuthed(false))
   }, [])
 
   // 图表联动：AI 工具事件携带查询区间 → 看板跳转到同一区间，方便对照验证
@@ -34,6 +44,9 @@ export default function App() {
     filter.storeId && `store_id=${filter.storeId}`,
   ].filter(Boolean).join('&')
   const q = qs ? `?${qs}` : ''
+
+  if (authed === null) return <div className="boot-screen">加载中…</div>
+  if (!authed) return <LoginGate onSuccess={() => setAuthed(true)} />
 
   return (
     <>
