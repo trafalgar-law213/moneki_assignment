@@ -226,9 +226,14 @@ def category_comparison(conn: sqlite3.Connection, start: str, end: str, dim: str
 
 
 def anomalies(conn: sqlite3.Connection, start: str, end: str, z_threshold: float = 2.5) -> dict:
-    """异常销售预警：每个门店的日营业额偏离自身均值超过 z_threshold 个标准差。"""
+    """异常销售预警（同星期对比）：每家店每天只与**同为该星期几**的历史均值/标准差比。
+
+    工作日与工作日比、周末与周末比——排除「周末天然火爆」这类周期性因素，
+    只报真正偏离该店该星期水平的日子。桶内样本 <2 天不判定（无统计意义）。
+    """
     import statistics
 
+    _WEEKDAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
     where, params = _where(start, end, None)
     rows = conn.execute(
         f"SELECT s.date, s.store_id, st.store_name, {REVENUE_SQL} AS revenue "
@@ -236,30 +241,42 @@ def anomalies(conn: sqlite3.Connection, start: str, end: str, z_threshold: float
         f"WHERE {where} GROUP BY s.date, s.store_id ORDER BY s.date, s.store_id",
         params,
     ).fetchall()
-    per_store: dict[str, list[tuple[str, str, float]]] = {}
+    per_store: dict[str, list[tuple[str, str, str, float]]] = {}
     for r in rows:
-        per_store.setdefault(r["store_id"], []).append((r["date"], r["store_name"], r["revenue"]))
+        wd = _WEEKDAYS[date_cls.fromisoformat(r["date"]).weekday()]
+        per_store.setdefault(r["store_id"], []).append((r["date"], wd, r["store_name"], r["revenue"]))
 
     days: list[dict] = []
     by_store: dict[str, dict] = {}
     for sid, series in per_store.items():
-        revenues = [x[2] for x in series]
-        mean = statistics.mean(revenues)
-        std = statistics.stdev(revenues) if len(revenues) > 1 else 0.0
-        by_store[sid] = {"store_id": sid, "store_name": series[0][1], "anomaly_count": 0}
-        if std == 0:
-            continue
-        for date_s, name, rev in series:
-            z = round((rev - mean) / std, 2)
+        buckets: dict[str, list[float]] = {}
+        pos_of: dict[str, int] = {}  # 每个日期在其星期桶内的位置（留一法定位用）
+        for date_s, wd, _, rev in series:
+            pos_of[date_s] = len(buckets.setdefault(wd, []))
+            buckets[wd].append(rev)
+        by_store[sid] = {"store_id": sid, "store_name": series[0][2], "anomaly_count": 0}
+        for date_s, wd, name, rev in series:
+            # 留一法：当天不混入自己的基准（否则异常值会稀释基线、弱化检出）
+            baseline = [v for j, v in enumerate(buckets[wd]) if j != pos_of[date_s]]
+            if len(baseline) < 2:
+                continue  # 该星期几样本不足，无统计意义
+            mean_w = statistics.mean(baseline)
+            std_w = statistics.stdev(baseline)
+            if std_w == 0:
+                continue  # 基准全相同（如恒定 100），无法定义偏离
+            z = round((rev - mean_w) / std_w, 2)
             if abs(z) >= z_threshold:
                 by_store[sid]["anomaly_count"] += 1
                 days.append({
                     "date": date_s,
+                    "weekday": wd,
                     "store_id": sid,
                     "store_name": name,
                     "revenue": round(rev, 2),
                     "zscore": z,
                     "direction": "偏高" if z > 0 else "偏低",
+                    "base_mean": round(mean_w, 2),
+                    "pct_vs_base": round((rev - mean_w) / mean_w * 100, 1) if mean_w else 0.0,
                 })
     days.sort(key=lambda d: (d["date"], d["store_id"]))
     return {"days": days, "by_store": [v for v in by_store.values()]}

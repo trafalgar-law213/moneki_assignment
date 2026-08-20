@@ -41,7 +41,15 @@ def real_db():
 
 
 def _nums(text: str) -> set[float]:
-    return {float(n.replace(",", "")) for n in re.findall(r"\d[\d,]*(?:\.\d+)?", text)}
+    """提取回答中的数字。日期/年份属于系统提示词注入的元信息（数据范围），
+    不是编造的经营数字 → 先剔除日期形态（2026-06-30 / 2026年6月30日 / 6月 / 5-7月 / 裸年份）再提取。"""
+    t = re.sub(r"\d{4}\s*-\s*\d{1,2}\s*-\s*\d{1,2}", " ", text)        # 2026-06-30
+    t = re.sub(r"\d{4}\s*年\s*\d{1,2}\s*月\s*(\d{1,2}\s*日)?", " ", t)  # 2026年6月30日
+    t = re.sub(r"\d{1,2}\s*月\s*(\d{1,2}\s*日)?", " ", t)               # 6月 / 6月30日
+    t = re.sub(r"(?<![\d.])\d{1,2}\s*-\s*\d{1,2}(?!\s*[\d.])", " ", t)  # 05-01 / 5-31（不带年份的日期）
+    t = re.sub(r"(?<![\d.])\d{1,2}\s*日", " ", t)                       # 31日
+    t = re.sub(r"(?<![0-9])(?:19|20)\d{2}(?![0-9])", " ", t)            # 2026（裸年份）
+    return {float(n.replace(",", "")) for n in re.findall(r"\d[\d,]*(?:\.\d+)?", t)}
 
 
 def _record(monkeypatch):
@@ -174,4 +182,5 @@ def test_live_fallback_no_fabrication(monkeypatch):
     text, _ = asyncio.run(_ask("北京烤鸭六月卖了多少钱？"))
 
     assert "没有" in text, f"兜底失败，实际回答: {text}"
-    assert _nums(text) <= _derivable(_result_nums(calls))
+    assert _nums(text) <= _derivable(_result_nums(calls)), (
+        f"回答冒出工具结果外的数字，实际回答: {text}\n工具结果: {[c['result'] for c in calls]}")

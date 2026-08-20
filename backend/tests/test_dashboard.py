@@ -111,9 +111,14 @@ def test_invalid_range_400():
 
 # ---------- 异常预警定向测试（独立临时库，精确构造数据） ----------
 
-def test_anomalies_detection_logic(tmp_path):
-    """10 天营收 100 + 1 天 5000 → 该日 z≈3.0 ≥ 2.5 必须被标记；平稳门店不误报。"""
-    db_path = tmp_path / "anomaly.db"
+def test_anomalies_weekday_aware(tmp_path):
+    """同星期对比（留一法）：周末天然火爆不误报；远超同星期六水平的日才报。
+
+    2026-06-01 是周一。4 整周 + 周六/周日各补 1 天：工作日恒 100，
+    周六 [1000,1010,990,1005,995]，周日 [900,915,885,910,890]（均匀分布，
+    留一法下最极端点 |z|≤1.69，零误报）；07-11（周六）S01 冲 5000 → 只报这一天。
+    """
+    db_path = tmp_path / "anomaly_weekday.db"
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     dbmod.init_schema(conn)
@@ -121,11 +126,24 @@ def test_anomalies_detection_logic(tmp_path):
         "INSERT INTO stores(store_id, store_name, category, district) VALUES(?,?,?,?)",
         [("S01", "测试店A", "拉面", "测试"), ("S02", "测试店B", "轻食", "测试")],
     )
+    sat = {"2026-06-06": 1000.0, "2026-06-13": 1010.0, "2026-06-20": 990.0,
+           "2026-06-27": 1005.0, "2026-07-04": 995.0}
+    sun = {"2026-06-07": 900.0, "2026-06-14": 915.0, "2026-06-21": 885.0, "2026-06-28": 910.0}
     rows = []
-    for day in range(1, 12):  # 07-01 ~ 07-11
-        date_s = f"2026-07-{day:02d}"
-        rows.append((f"A{day}", date_s, "S01", "P01", 1, 5000.0 if day == 11 else 100.0, "现金"))
-        rows.append((f"B{day}", date_s, "S02", "P01", 1, 100.0, "现金"))
+    day_no = 0
+    for _ in range(4):
+        for _ in range(7):
+            day_no += 1
+            date_s = f"2026-06-{day_no:02d}"
+            rev = sat.get(date_s, sun.get(date_s, 100.0))
+            rows.append((f"A{day_no}", date_s, "S01", "P01", 1, rev, "现金"))
+            rows.append((f"B{day_no}", date_s, "S02", "P01", 1, rev, "现金"))
+    rows.append(("A-0704", "2026-07-04", "S01", "P01", 1, 995.0, "现金"))
+    rows.append(("B-0704", "2026-07-04", "S02", "P01", 1, 995.0, "现金"))
+    rows.append(("A-0705", "2026-07-05", "S01", "P01", 1, 890.0, "现金"))  # 第 5 个周日
+    rows.append(("B-0705", "2026-07-05", "S02", "P01", 1, 890.0, "现金"))
+    rows.append(("A-0711", "2026-07-11", "S01", "P01", 1, 5000.0, "现金"))  # 异常冲高
+    rows.append(("B-0711", "2026-07-11", "S02", "P01", 1, 1000.0, "现金"))  # 正常周六水平
     conn.executemany(
         "INSERT INTO sales(order_id, date, store_id, product_id, qty, amount, payment) "
         "VALUES(?,?,?,?,?,?,?)",
@@ -133,13 +151,16 @@ def test_anomalies_detection_logic(tmp_path):
     )
     conn.commit()
 
-    result = query.anomalies(conn, "2026-07-01", "2026-07-11")
+    result = query.anomalies(conn, "2026-06-01", "2026-07-11")
     flagged = [d for d in result["days"] if d["store_id"] == "S01"]
-    assert len(flagged) == 1
-    assert flagged[0]["date"] == "2026-07-11"
+    assert [d["date"] for d in flagged] == ["2026-07-11"], (
+        f"只应报 07-11 异常冲高，实际: {[d['date'] for d in flagged]}")
     assert flagged[0]["direction"] == "偏高"
+    assert flagged[0]["weekday"] == "周六"
     assert flagged[0]["zscore"] >= 2.5
-    # S02 平稳无异常
+    assert flagged[0]["base_mean"] == 1000.0   # 留一法：不含 5000 当天，其余 5 个周六的均值
+    assert flagged[0]["pct_vs_base"] == 400.0
+    # 正常周六/周日（周期高峰）零误报；S02（含其正常周六）零误报
     assert all(d["store_id"] != "S02" for d in result["days"])
     conn.close()
 

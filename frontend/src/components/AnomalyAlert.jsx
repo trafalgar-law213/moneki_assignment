@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { getJSON, fmtMoney } from '../api'
 import { emit } from '../bus'
 
-// 异常预警（z-score>2.5）+ 一键让 AI 出经营建议（与聊天面板事件总线解耦）
+// 异常预警（同星期对比 z-score≥2.5）+ 一键让 AI 出经营建议（与聊天面板事件总线解耦）
 export default function AnomalyAlert({ q }) {
   const [anom, setAnom] = useState(null)
   const [sent, setSent] = useState(false)
@@ -25,12 +25,13 @@ export default function AnomalyAlert({ q }) {
         {days.length === 0 && <li className="empty">✓ 当前区间无异常销售日</li>}
         {days.slice(0, 8).map((d) => (
           <li key={`${d.date}-${d.store_id}`}>
-            <span>{d.date}</span>
+            <span>{d.date}（{d.weekday}）</span>
             <span>{d.store_name}</span>
             <span className={d.direction === '偏高' ? 'dir-up' : 'dir-down'}>
               {d.direction === '偏高' ? '▲ 偏高' : '▼ 偏低'}
             </span>
-            <span>¥{fmtMoney(d.revenue)}（z={d.zscore}）</span>
+            <span>¥{fmtMoney(d.revenue)}，较同{d.weekday}日均{' '}
+              {d.pct_vs_base >= 0 ? '+' : ''}{d.pct_vs_base}%（z={d.zscore}）</span>
           </li>
         ))}
         {days.length > 8 && <li>…另有 {days.length - 8} 天</li>}
