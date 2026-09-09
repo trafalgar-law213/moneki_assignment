@@ -1,6 +1,6 @@
 # POKE ONE 连锁餐饮经营看板 + AI 数据问答
 
-求职实操作业：5 家门店脱敏 POS 数据（2026-05-01 ~ 2026-07-31，清洗后 11,815 条流水）→ **经营看板 + AI 自然语言问答**。
+5 家门店脱敏 POS 数据（2026-05-01 ~ 2026-07-31，清洗后 11,815 条流水）→ **经营看板 + AI 自然语言问答**。
 
 核心硬指标：**AI 回答中的每个数字都来自真实数据库查询，与看板接口对账一致**——由「唯一取数层」架构保证（看板 API 与 AI 工具共用同一套查询函数），并有 mock/live 双层自动化测试守护。
 
@@ -87,8 +87,8 @@ cd backend && .venv/bin/pytest tests/ -q                     # Linux/macOS
 | 选择 | 理由 |
 |---|---|
 | FastAPI + SQLite(WAL) | 1.2 万行数据量级 SQLite 绰绰有余；零部署依赖；WAL 支撑并发读 |
-| React 18(Vite) + ECharts | 题目点名的主流栈；ECharts 双轴图开箱即用 |
-| 手写 CSS 深色主题 | 题目要求"有审美、不要组件库套壳" |
+| React 18(Vite) + ECharts | 业界主流栈；ECharts 双轴图开箱即用 |
+| 手写 CSS 深色主题 | 纯手写、不套组件库，审美与视觉工程完整可控 |
 | DeepSeek V4 Pro + function calling | 结构化工具调用：LLM 只出参数，SQL 由后端白名单拼装+参数化绑定，防注入、可测试 |
 | SSE 流式 | 首字秒回 + 思考过程透明，体验好且实现稳 |
 | 单容器部署（FastAPI 托管 dist） | 3 小时窗口内最少翻车点；README 已写清取舍 |
@@ -105,9 +105,8 @@ cd backend && .venv/bin/pytest tests/ -q                     # Linux/macOS
 ## 目录
 
 ```
-├── data/            # 数据副本（清洗只碰副本；题目夹只读）
+├── data/            # 数据副本（清洗只碰副本；原始数据夹只读）
 ├── backend/         # FastAPI：pipeline 清洗 / query 唯一取数层 / api 看板+聊天 / ai 工具+客户端 / tests
 ├── frontend/        # React+Vite：组件各自取数，事件总线联动（AI 区间 → 看板跳转）
-├── AI_USAGE.md      # AI 使用说明（题目必交）
-└── DEMO.md          # 演示脚本（题目必交）
+└── AI_USAGE.md      # AI 使用说明（AI 协作分工与开发规范）
 ```
