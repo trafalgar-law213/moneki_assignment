@@ -29,19 +29,8 @@ def health():
 def meta():
     conn = dbmod.get_conn()
     try:
-        stores = [dict(r) for r in conn.execute(
-            "SELECT store_id, store_name, category, district FROM stores ORDER BY store_id"
-        )]
-        return {
-            **query.data_bounds(conn),
-            "stores": stores,
-            "store_categories": [r["c"] for r in conn.execute(
-                "SELECT DISTINCT category AS c FROM stores ORDER BY category")],
-            "product_categories": [r["c"] for r in conn.execute(
-                "SELECT DISTINCT product_category AS c FROM products ORDER BY product_category")],
-            "payments": [r["p"] for r in conn.execute(
-                "SELECT DISTINCT payment AS p FROM sales ORDER BY payment")],
-        }
+        # 维度枚举统一走 query.dimensions（与 AI 提示词共用一处查询，见 query.py 注释）
+        return {**query.data_bounds(conn), **query.dimensions(conn)}
     finally:
         conn.close()
 

@@ -45,16 +45,13 @@ class ChatRequest(BaseModel):
 def build_system(conn) -> str:
     """系统提示词：动态注入真实数据上下文 + 铁律（数字只来自工具、查不到就说没有）。"""
     bounds = query.data_bounds(conn)
-    stores = conn.execute(
-        "SELECT store_name, category, district FROM stores ORDER BY store_id"
-    ).fetchall()
-    store_lines = "、".join(f"{s['store_name']}({s['category']}/{s['district']})" for s in stores)
-    scats = "、".join(r["c"] for r in conn.execute(
-        "SELECT DISTINCT category AS c FROM stores ORDER BY category"))
-    pcats = "、".join(r["c"] for r in conn.execute(
-        "SELECT DISTINCT product_category AS c FROM products ORDER BY product_category"))
-    payments = "、".join(r["p"] for r in conn.execute(
-        "SELECT DISTINCT payment AS p FROM sales ORDER BY payment"))
+    dims = query.dimensions(conn)  # 维度枚举与看板 /meta 共用一处查询
+    store_lines = "、".join(
+        f"{s['store_name']}({s['category']}/{s['district']})" for s in dims["stores"]
+    )
+    scats = "、".join(dims["store_categories"])
+    pcats = "、".join(dims["product_categories"])
+    payments = "、".join(dims["payments"])
     year = bounds["date_min"][:4] if bounds["date_min"] else ""
 
     return (

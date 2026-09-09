@@ -66,6 +66,24 @@ def data_bounds(conn: sqlite3.Connection) -> dict:
     return {"date_min": row["dmin"], "date_max": row["dmax"], "sales_rows": row["rows"]}
 
 
+def dimensions(conn: sqlite3.Connection) -> dict:
+    """维度枚举：门店清单 + 品类/支付方式可选项（看板 /meta 与 AI 提示词共用）。
+
+    枚举属于「数据事实」，只能在这里查一次。路由和提示词里重复写 DISTINCT 查询，
+    会增加新品类/支付方式时容易漏改一处（示例：AI 提示词不知道新支付方式 → 查询失败）。
+    """
+    return {
+        "stores": [dict(r) for r in conn.execute(
+            "SELECT store_id, store_name, category, district FROM stores ORDER BY store_id")],
+        "store_categories": [r["c"] for r in conn.execute(
+            "SELECT DISTINCT category AS c FROM stores ORDER BY category")],
+        "product_categories": [r["c"] for r in conn.execute(
+            "SELECT DISTINCT product_category AS c FROM products ORDER BY product_category")],
+        "payments": [r["p"] for r in conn.execute(
+            "SELECT DISTINCT payment AS p FROM sales ORDER BY payment")],
+    }
+
+
 def _where(start: str, end: str, store_ids: list[str] | None, extra_sql: str = "") -> tuple[str, list]:
     """构造 WHERE 片段（参数化）。"""
     parts = ["s.date >= ?", "s.date <= ?"]
