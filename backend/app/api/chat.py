@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from .. import db as dbmod
 from .. import query
 from ..ai import client as ai_client
+from ..ai import embeddings as ai_embeddings
 from ..ai import tools as ai_tools
 
 router = APIRouter(prefix="/api")
@@ -149,6 +150,29 @@ def _tool_summary(result: dict) -> str:
     f"合计营业额 {total.get('revenue')} 元、订单 {total.get('orders')}"
 
 
+def _save_history(conn, msgs: list[dict], assistant_msg: dict) -> None:
+    """把本轮问答写入历史表（跨会话语义记忆的数据来源，见 api/history.py）。
+
+    失败静默跳过：模型缺失、写库异常都不得影响回答主链路（问答永远可用）。
+    """
+    try:
+        question = next(
+            (m.get("content") for m in reversed(msgs) if m.get("role") == "user" and m.get("content")),
+            None,
+        )
+        answer = assistant_msg.get("content") or ""
+        if not question or not answer:
+            return
+        emb = ai_embeddings.embed([question])[0]
+        query.insert_qa(conn, question, answer, emb)
+        conn.commit()
+    except Exception:  # noqa: BLE001
+        try:
+            conn.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 async def run_chat(messages: list[dict]) -> AsyncIterator[dict]:
     """核心问答流程（可直接测试的异步生成器，产出 SSE 事件 dict）。
 
@@ -168,6 +192,7 @@ async def run_chat(messages: list[dict]) -> AsyncIterator[dict]:
 
             if not assistant_msg.get("tool_calls"):
                 # 无工具调用 = 最终回答（正文已按块以 delta 流出）
+                _save_history(conn, msgs, assistant_msg)
                 # done 回传完整历史（去掉 system）：含本轮工具调用的 assistant 消息与工具结果，
                 # 前端保存后全量回传，追问上下文（"那五月呢"）才成立
                 yield {"type": "done", "data": {"messages": msgs[1:] + [assistant_msg]}}
@@ -197,6 +222,7 @@ async def run_chat(messages: list[dict]) -> AsyncIterator[dict]:
         out = {}
         async for ev in _streamed_completion(client, msgs, with_tools=False, out=out):
             yield ev
+        _save_history(conn, msgs, out["assistant_msg"])
         yield {"type": "done", "data": {"messages": msgs[1:] + [out["assistant_msg"]]}}
     finally:
         conn.close()

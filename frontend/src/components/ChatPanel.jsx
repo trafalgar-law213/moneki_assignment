@@ -54,6 +54,7 @@ export default function ChatPanel() {
           setHistory(ev.data.messages)
           setStream('')
           setThinking('')
+          emit('chat:done') // 通知历史面板刷新（跨会话记忆）
         } else if (ev.type === 'error') {
           setError(ev.data.message || 'AI 服务暂时不可用')
         }

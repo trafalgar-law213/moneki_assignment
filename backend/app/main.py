@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from . import db as dbmod
 from . import pipeline
 from . import security
-from .api import auth, dashboard
+from .api import auth, dashboard, history
 
 # chat 路由在 Step 4 接入（解耦：dashboard 不依赖 chat）
 try:
@@ -26,11 +26,14 @@ except ImportError:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # 启动时若数据库未初始化（无 sales 表）则自动跑清洗管线（幂等，毫秒级）
+    # 启动时若数据库未初始化（无 sales 表）则自动跑清洗管线（幂等，毫秒级）；
+    # 已有数据的库则补建新增表（如 qa_history，CREATE IF NOT EXISTS 幂等）——轻量 schema 演进
     conn = dbmod.get_conn()
     try:
         if not dbmod.is_initialized(conn):
             pipeline.run()
+        else:
+            dbmod.init_schema(conn)
     finally:
         conn.close()
     yield
@@ -44,6 +47,7 @@ app.add_middleware(
 
 app.include_router(dashboard.router)
 app.include_router(auth.router)
+app.include_router(history.router)
 if _HAS_CHAT:
     app.include_router(chat.router)
 

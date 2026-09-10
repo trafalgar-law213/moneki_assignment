@@ -8,6 +8,7 @@ import TopProducts from './components/TopProducts'
 import StoreCompare from './components/StoreCompare'
 import AnomalyAlert from './components/AnomalyAlert'
 import ChatPanel from './components/ChatPanel'
+import HistoryPanel from './components/HistoryPanel'
 import LoginGate from './components/LoginGate'
 
 export default function App() {
@@ -75,6 +76,10 @@ export default function App() {
           <div className="panel">
             <h3>异常预警 · 经营建议</h3>
             <AnomalyAlert q={q} />
+          </div>
+          <div className="panel">
+            <h3>历史问答 · 跨会话记忆</h3>
+            <HistoryPanel />
           </div>
         </div>
       </div>

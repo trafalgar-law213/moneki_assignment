@@ -279,3 +279,11 @@ html, body {
 
 .login-err { margin: 0; color: var(--red); font-size: 12px; }
 .login-tip { margin: 0; color: var(--muted); font-size: 11px; text-align: center; }
+
+/* ---------- 历史问答（跨会话记忆） ---------- */
+
+.history { display: flex; flex-direction: column; height: 420px; }
+.history .history-list { flex: 1; overflow-y: auto; }
+.history-item { display: flex; flex-direction: column; gap: 4px; }
+.history-item .history-q { font-weight: 600; }
+.history-item .history-a { color: var(--muted); font-size: 12px; }

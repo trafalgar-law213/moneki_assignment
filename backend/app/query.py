@@ -311,6 +311,51 @@ def anomalies(conn: psycopg.Connection, start: str, end: str, z_threshold: float
     return {"days": days, "by_store": [v for v in by_store.values()]}
 
 
+# ---------- 语义检索（问答历史，跨会话长期记忆） ----------
+
+def _vec_literal(v: list[float]) -> str:
+    """把向量编码为 pgvector 字面量 '[..]'（零依赖，免装 pgvector-python 适配器）。"""
+    return "[" + ",".join(f"{x:.6f}" for x in v) + "]"
+
+
+def insert_qa(conn: psycopg.Connection, question: str, answer: str, embedding: list[float]) -> None:
+    """写入一条问答历史。向量由调用方计算（测试可注入假向量）。"""
+    conn.execute(
+        "INSERT INTO qa_history(question, answer, embedding) VALUES(%s, %s, %s::vector)",
+        (question, answer, _vec_literal(embedding)),
+    )
+
+
+def _qa_row(r) -> dict:
+    d = dict(r)
+    if d.get("created_at") is not None:
+        d["created_at"] = d["created_at"].isoformat(timespec="seconds")
+    if d.get("similarity") is not None:
+        d["similarity"] = round(float(d["similarity"]), 4)
+    return d
+
+
+def search_history(conn: psycopg.Connection, query_embedding: list[float], limit: int = 5) -> list[dict]:
+    """语义检索：按余弦相似度返回最相关的历史问答（相似度 = 1 - 余弦距离）。"""
+    lit = _vec_literal(query_embedding)
+    rows = conn.execute(
+        "SELECT id, question, answer, created_at, "
+        "1 - (embedding <=> %s::vector) AS similarity "
+        "FROM qa_history ORDER BY embedding <=> %s::vector LIMIT %s",
+        (lit, lit, max(1, min(int(limit), 50))),
+    ).fetchall()
+    return [_qa_row(r) for r in rows]
+
+
+def recent_history(conn: psycopg.Connection, limit: int = 20) -> list[dict]:
+    """最近的问答历史（新的在前，供历史面板展示）。"""
+    rows = conn.execute(
+        "SELECT id, question, answer, created_at FROM qa_history ORDER BY id DESC LIMIT %s",
+        (max(1, min(int(limit), 50)),),
+    ).fetchall()
+    return [_qa_row(r) for r in rows]
+
+
 def metrics_by(
     conn: psycopg.Connection,
     start: str,

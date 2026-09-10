@@ -18,6 +18,8 @@ DEFAULT_DSN = "postgresql://postgres:pokeone_dev@localhost:5432/pokeone"
 
 # 逐条执行（psycopg 不支持一次执行多条语句）
 SCHEMA_STATEMENTS = [
+    # 语义检索（pgvector）：问答历史表依赖此扩展
+    "CREATE EXTENSION IF NOT EXISTS vector",
     """
     CREATE TABLE IF NOT EXISTS stores (
         store_id   TEXT PRIMARY KEY,
@@ -59,6 +61,18 @@ SCHEMA_STATEMENTS = [
         raw    TEXT NOT NULL    -- 原始行 JSON
     )
     """,
+    # 问答历史（跨会话长期记忆）：embedding 为 bge-small-zh-v1.5 向量（512 维，见 app/ai/embeddings.py）
+    """
+    CREATE TABLE IF NOT EXISTS qa_history (
+        id         BIGSERIAL PRIMARY KEY,
+        question   TEXT NOT NULL,
+        answer     TEXT NOT NULL,
+        embedding  vector(512) NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_qa_history_embedding "
+    "ON qa_history USING hnsw (embedding vector_cosine_ops)",
 ]
 
 
