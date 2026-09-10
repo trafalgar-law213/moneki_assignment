@@ -1,5 +1,7 @@
 # POKE ONE 连锁餐饮经营看板 + AI 数据问答
 
+[![CI](https://github.com/trafalgar-law213/moneki_assignment/actions/workflows/ci.yml/badge.svg)](https://github.com/trafalgar-law213/moneki_assignment/actions/workflows/ci.yml)
+
 5 家门店脱敏 POS 数据（2026-05-01 ~ 2026-07-31，清洗后 11,815 条流水）→ **经营看板 + AI 自然语言问答**。
 
 核心硬指标：**AI 回答中的每个数字都来自真实数据库查询，与看板接口对账一致**——由「唯一取数层」架构保证（看板 API 与 AI 工具共用同一套查询函数），并有 mock/live 双层自动化测试守护。
@@ -72,6 +74,8 @@ pipeline（清洗，可独立运行）──写──▶ SQLite ◀──读─�
 cd backend && .venv/Scripts/python.exe -m pytest tests/ -q   # Windows
 cd backend && .venv/bin/pytest tests/ -q                     # Linux/macOS
 ```
+
+> CI：push / PR 时由 GitHub Actions 自动跑全部测试（`.github/workflows/ci.yml`；live 测试无 key 自动跳过）。
 
 65 个测试分五层（live 测试无 key 自动 skip）：
 | 层 | 文件 | 守护什么 |
