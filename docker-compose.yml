@@ -1,6 +1,22 @@
-# 一键部署：服务器上 docker compose up -d --build
+# 一键部署：服务器上 docker compose up -d --build（v2：应用 + PostgreSQL 两容器）
 # 前置：在 backend/.env 填好 DEEPSEEK_API_KEY（gitignore，运行时注入，绝不进镜像）
+# PG 密码：默认仅本地开发用；生产用环境变量覆盖——POSTGRES_PASSWORD=强密码 docker compose up -d
 services:
+  db:
+    image: postgres:16
+    container_name: pokeone-db
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pokeone_dev}
+      POSTGRES_DB: pokeone
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d pokeone"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
   pokeone:
     build: .
     container_name: pokeone
@@ -8,4 +24,13 @@ services:
       - "8000:8000"
     env_file:
       - ./backend/.env
+    environment:
+      # environment 优先于 env_file，保证容器内连的是 db 容器
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-pokeone_dev}@db:5432/pokeone
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  pgdata:

@@ -31,3 +31,6 @@ docs/
 
 # DEMO.md 演示脚本转为本地存查（对外展示项目定位，不入公开仓库）
 DEMO.md
+
+# 本地 compose 端口覆盖（宿主机 8000 被其他服务占用时用 8001 验证）
+docker-compose.local-override.yml

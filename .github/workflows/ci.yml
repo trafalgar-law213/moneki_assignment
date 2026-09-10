@@ -10,6 +10,25 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    # PG 服务容器：测试基建会在上面建临时库（与本地 docker 起 PG 完全同构）
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: pokeone_dev
+          POSTGRES_DB: pokeone
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+
+    env:
+      DATABASE_URL: postgresql://postgres:pokeone_dev@localhost:5432/pokeone
+
     defaults:
       run:
         working-directory: backend
@@ -26,5 +45,5 @@ jobs:
       - name: 安装依赖
         run: pip install -r requirements.txt
 
-      - name: 运行测试
+      - name: 运行测试（live 测试无 key 自动跳过）
         run: python -m pytest -q

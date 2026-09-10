@@ -6,23 +6,27 @@
 
 核心硬指标：**AI 回答中的每个数字都来自真实数据库查询，与看板接口对账一致**——由「唯一取数层」架构保证（看板 API 与 AI 工具共用同一套查询函数），并有 mock/live 双层自动化测试守护。
 
-## 三步跑起来
+## 四步跑起来
 
 ```bash
-# 1. 后端（Python 3.10+）
+# 1. 数据库（PostgreSQL 16，本地开发用 Docker 一条命令）
+docker run -d --name pokeone-pg -e POSTGRES_PASSWORD=pokeone_dev -e POSTGRES_DB=pokeone \
+  -p 5432:5432 postgres:16
+
+# 2. 后端（Python 3.10+）
 cd backend
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env             # 填入 DEEPSEEK_API_KEY（AI 问答需要；不填则只有看板可用）
-uvicorn app.main:app --port 8000 # 启动时自动清洗 data/*.csv 建库（幂等），并托管前端构建产物
+uvicorn app.main:app --port 8000 # 启动时若库未初始化则自动清洗 data/*.csv 建库（幂等），并托管前端构建产物
 
-# 2. 前端（Node 18+）
+# 3. 前端（Node 18+）
 cd ../frontend
 npm install
 npm run build                    # 产物 dist/ 由后端直接托管
 
-# 3. 打开浏览器
+# 4. 打开浏览器
 # http://localhost:8000
 ```
 
@@ -36,8 +40,10 @@ docker compose up -d --build
 # 访问 http://服务器IP:8000
 ```
 
+- 两容器：`db`（postgres:16，数据持久化在 pgdata 卷）+ `pokeone`（应用镜像，`depends_on` 带健康检查、等数据库就绪才启动）
 - 前置：`backend/.env` 填好 `DEEPSEEK_API_KEY`（gitignore 文件，运行时经 compose `env_file` 注入，**绝不进镜像**）
-- 单镜像多阶段构建：node 阶段构建前端 → python 阶段运行 FastAPI 并托管 dist；容器启动时若数据库缺失，自动清洗 `data/*.csv` 建库（幂等）
+- 单镜像多阶段构建：node 阶段构建前端 → python 阶段运行 FastAPI 并托管 dist；容器启动时若库未初始化，自动清洗 `data/*.csv` 建库（幂等）
+- 生产 PG 密码：`POSTGRES_PASSWORD=强密码 docker compose up -d`（默认值仅本地开发用）
 - 公网访问保护（可选）：在 `backend/.env` 加一行 `ACCESS_PASSWORD=你的口令` 并重建容器，即开启登录页 + AI 接口双层限流（单 IP 每分钟 5 次 / 全站每天 200 次，`RATE_PER_MIN` / `RATE_GLOBAL_PER_DAY` 可调）；**不设置则保护整体关闭**（本地开发默认如此，自动化测试不受影响）
 
 ## 功能
@@ -56,7 +62,7 @@ docker compose up -d --build
 ## 架构（依赖单向，模块解耦）
 
 ```
-pipeline（清洗，可独立运行）──写──▶ SQLite ◀──读── db（连接层）
+pipeline（清洗，可独立运行）──写──▶ PostgreSQL ◀──读── db（连接层）
                                         ▲
                       query（★唯一取数层：看板与 AI 共用，数字一致性由架构保证）
                         ▲                    ▲
@@ -71,6 +77,7 @@ pipeline（清洗，可独立运行）──写──▶ SQLite ◀──读─�
 ## 测试
 
 ```bash
+# 前置：本地 PostgreSQL 已在运行（见「四步跑起来」第 1 步；测试会自动建临时库，跑完删除）
 cd backend && .venv/Scripts/python.exe -m pytest tests/ -q   # Windows
 cd backend && .venv/bin/pytest tests/ -q                     # Linux/macOS
 ```
@@ -90,12 +97,21 @@ cd backend && .venv/bin/pytest tests/ -q                     # Linux/macOS
 
 | 选择 | 理由 |
 |---|---|
-| FastAPI + SQLite(WAL) | 1.2 万行数据量级 SQLite 绰绰有余；零部署依赖；WAL 支撑并发读 |
+| FastAPI + PostgreSQL | v1 原型用 SQLite（零运维、单文件）；v2 迁 PostgreSQL——pgvector 向量能力 + 生产化（多实例/并发/备份），见「数据库演进」 |
 | React 18(Vite) + ECharts | 业界主流栈；ECharts 双轴图开箱即用 |
 | 手写 CSS 深色主题 | 纯手写、不套组件库，审美与视觉工程完整可控 |
 | DeepSeek V4 Pro + function calling | 结构化工具调用：LLM 只出参数，SQL 由后端白名单拼装+参数化绑定，防注入、可测试 |
 | SSE 流式 | 首字秒回 + 思考过程透明，体验好且实现稳 |
 | 单容器部署（FastAPI 托管 dist） | 3 小时窗口内最少翻车点；README 已写清取舍 |
+
+## 数据库演进（v2：SQLite → PostgreSQL）
+
+| 阶段 | 选型 | 理由 |
+|---|---|---|
+| v1（原型） | SQLite | 1.2 万行单机 demo：零运维、单文件、读写够快——原型期的最优解 |
+| v2（当前） | PostgreSQL | ① pgvector 向量能力（RAG 的基础设施，SQLite 没有）；② 生产化：多实例部署共享数据、并发写入、备份与高可用 |
+
+迁移是真实的工程动作，实际替换的内容：连接层（sqlite3 → psycopg）、值占位符方言（`?` → `%s`）、`ROUND(double, 2)` 经 `NUMERIC` 中转（PG 无此重载）。**PG 的严格性还暴露了两处被 SQLite 宽容掩盖的写法**：GROUP BY 必须覆盖 SELECT 的全部非聚合列；外键默认强制（定向测试因此补出一处数据完整性缺口）。迁移的安全网是既有测试：65 个全绿即迁移成功的证明。
 
 ## 数据策略（四层隔离，数据内容不进 AI 上下文）
 
@@ -112,5 +128,6 @@ cd backend && .venv/bin/pytest tests/ -q                     # Linux/macOS
 ├── data/            # 数据副本（清洗只碰副本；原始数据夹只读）
 ├── backend/         # FastAPI：pipeline 清洗 / query 唯一取数层 / api 看板+聊天 / ai 工具+客户端 / tests
 ├── frontend/        # React+Vite：组件各自取数，事件总线联动（AI 区间 → 看板跳转）
+├── .github/         # GitHub Actions：push/PR 自动跑测试（含 PG 服务容器）
 └── AI_USAGE.md      # AI 使用说明（AI 协作分工与开发规范）
 ```

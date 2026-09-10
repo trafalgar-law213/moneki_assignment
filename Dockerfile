@@ -21,5 +21,5 @@ COPY --from=fe /fe/dist /frontend/dist
 ENV APP_DATA_DIR=/app/data
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8000
-# 启动时若数据库缺失会自动跑清洗管线（幂等，由 data/*.csv 重建）
+# 启动时若数据库未初始化会自动跑清洗管线（幂等，由 data/*.csv 重建）
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
