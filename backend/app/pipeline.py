@@ -22,15 +22,18 @@ import io
 import json
 import os
 import re
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 from statistics import median
+
+import psycopg
 
 from . import db as dbmod
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = Path(os.environ.get("APP_DATA_DIR", REPO_ROOT / "data"))
+# 质量报告固定写 backend/data/（只含聚合数字，可审计；迁移后与数据库位置解耦）
+REPORT_PATH = Path(__file__).resolve().parent.parent / "data" / "quality_report.json"
 
 _NUM_STRIP = re.compile(r"[¥￥,\s元]")
 
@@ -230,7 +233,7 @@ def clean_sales(
 
 
 def write_db(
-    conn: sqlite3.Connection,
+    conn: psycopg.Connection,
     stores: dict[str, dict],
     products: dict[str, dict],
     sales: list[dict],
@@ -239,32 +242,33 @@ def write_db(
     dbmod.init_schema(conn)
     for table in ("quarantined", "sales", "products", "stores"):
         conn.execute(f"DELETE FROM {table}")
-    conn.executemany(
-        "INSERT INTO stores(store_id, store_name, category, district) "
-        "VALUES(:store_id, :store_name, :category, :district)",
-        [{"store_id": sid, **meta} for sid, meta in stores.items()],
-    )
-    conn.executemany(
-        "INSERT INTO products(product_id, product_name, product_category, unit_price) "
-        "VALUES(:product_id, :product_name, :product_category, :unit_price)",
-        [{"product_id": pid, **meta} for pid, meta in products.items()],
-    )
-    conn.executemany(
-        "INSERT INTO sales(order_id, date, store_id, product_id, qty, amount, payment) "
-        "VALUES(:order_id, :date, :store_id, :product_id, :qty, :amount, :payment)",
-        sales,
-    )
-    conn.executemany(
-        "INSERT INTO quarantined(source, reason, raw) VALUES('sales', ?, ?)",
-        quarantine,
-    )
+    # psycopg 的命名参数为 %(name)s（SQLite 的 :name 语法不适用）
+    with conn.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO stores(store_id, store_name, category, district) "
+            "VALUES(%(store_id)s, %(store_name)s, %(category)s, %(district)s)",
+            [{"store_id": sid, **meta} for sid, meta in stores.items()],
+        )
+        cur.executemany(
+            "INSERT INTO products(product_id, product_name, product_category, unit_price) "
+            "VALUES(%(product_id)s, %(product_name)s, %(product_category)s, %(unit_price)s)",
+            [{"product_id": pid, **meta} for pid, meta in products.items()],
+        )
+        cur.executemany(
+            "INSERT INTO sales(order_id, date, store_id, product_id, qty, amount, payment) "
+            "VALUES(%(order_id)s, %(date)s, %(store_id)s, %(product_id)s, %(qty)s, %(amount)s, %(payment)s)",
+            sales,
+        )
+        cur.executemany(
+            "INSERT INTO quarantined(source, reason, raw) VALUES('sales', %s, %s)",
+            quarantine,
+        )
     conn.commit()
 
 
-def run(data_dir: Path | None = None, db_path: Path | None = None) -> dict:
+def run(data_dir: Path | None = None, dsn: str | None = None) -> dict:
     """完整跑一次清洗入库，返回质量报告（幂等，可重复执行）。"""
     data_dir = Path(data_dir or DATA_DIR)
-    db_path = Path(db_path or dbmod.get_db_path())
 
     missing = [f.name for f in ("sales.csv", "stores.csv", "products.csv") if not (data_dir / f).exists()]
     if missing:
@@ -274,9 +278,7 @@ def run(data_dir: Path | None = None, db_path: Path | None = None) -> dict:
     products, products_report = clean_products(load_csv(data_dir / "products.csv"))
     sales, quarantine, sales_report = clean_sales(load_csv(data_dir / "sales.csv"), stores, products)
 
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = dbmod.get_conn(dsn)
     write_db(conn, stores, products, sales, quarantine)
 
     row = conn.execute("SELECT MIN(date) AS dmin, MAX(date) AS dmax, COUNT(*) AS n FROM sales").fetchone()
@@ -289,14 +291,14 @@ def run(data_dir: Path | None = None, db_path: Path | None = None) -> dict:
         },
         "cleaning": {"stores": stores_report, "products": products_report, "sales": sales_report},
         "db": {
-            "path": str(db_path),
             "sales_rows": row["n"],
             "quarantined_rows": len(quarantine),
             "date_min": row["dmin"],
             "date_max": row["dmax"],
         },
     }
-    (db_path.parent / "quality_report.json").write_text(
+    REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    REPORT_PATH.write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     conn.close()

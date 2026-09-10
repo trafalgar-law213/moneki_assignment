@@ -2,19 +2,28 @@
 
 看板 API 与 AI 工具都调用这里的函数 → AI 回答的数字与看板数字**由架构保证一致**。
 安全：列名只能来自白名单映射；值一律参数化绑定，杜绝 SQL 注入。
+方言：PostgreSQL（v2 由 SQLite 迁移）——值占位符 %s；PG 没有 ROUND(double, 2)，
+金额/数量先 ::numeric 再 ::float8 转回（返回类型保持 float 不变）。
+
+PG 严格性备注：SELECT 中的非聚合列必须出现在 GROUP BY（SQLite 允许裸列、PG 不允许），
+故各聚合查询按粒度补齐 GROUP BY 列（见 _GROUP_LABELS 与各函数内注释）。
 """
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import date as date_cls
 from datetime import timedelta
 
+import psycopg
+
 # ---------- 常量与白名单 ----------
 
-REVENUE_SQL = "ROUND(SUM(s.amount), 2)"
+# PG 没有 ROUND(double precision, int)：先转 NUMERIC 取两位小数，再转回 FLOAT8
+REVENUE_SQL = "ROUND(SUM(s.amount)::numeric, 2)::float8"
 ORDERS_SQL = "COUNT(DISTINCT s.order_id)"
-QTY_SQL = "ROUND(SUM(s.qty), 2)"
+QTY_SQL = "ROUND(SUM(s.qty)::numeric, 2)::float8"
+# 客单价公式收敛一处（迁移时要同步改的两处之一，直接抽常量消除重复）
+AOV_SQL = f"ROUND((SUM(s.amount) * 1.0 / {ORDERS_SQL})::numeric, 2)::float8"
 
 # 粒度 → (分组列, JOIN 需求, 排序方式)
 _GROUP_COLUMNS = {
@@ -26,12 +35,12 @@ _GROUP_COLUMNS = {
     "payment": ("s.payment", "", "revenue"),
 }
 
-# 粒度 → 额外展示列（与分组列配套的 SELECT 片段）
+# 粒度 → 额外展示列（与分组列配套；PG 下需同时进入 GROUP BY，见 metrics_by）
 _GROUP_LABELS = {
-    "store": "st.store_name AS label",
-    "store_category": "st.category AS label",
-    "product_category": "p.product_category AS label",
-    "product": "p.product_name AS label",
+    "store": "st.store_name",
+    "store_category": "st.category",
+    "product_category": "p.product_category",
+    "product": "p.product_name",
 }
 
 _DATE_RE = r"^\d{4}-\d{2}-\d{2}$"
@@ -59,14 +68,14 @@ def validate_range(start: str, end: str, data_min: str, data_max: str) -> tuple[
     return start, end
 
 
-def data_bounds(conn: sqlite3.Connection) -> dict:
+def data_bounds(conn: psycopg.Connection) -> dict:
     row = conn.execute(
         "SELECT MIN(date) AS dmin, MAX(date) AS dmax, COUNT(*) AS rows FROM sales"
     ).fetchone()
     return {"date_min": row["dmin"], "date_max": row["dmax"], "sales_rows": row["rows"]}
 
 
-def dimensions(conn: sqlite3.Connection) -> dict:
+def dimensions(conn: psycopg.Connection) -> dict:
     """维度枚举：门店清单 + 品类/支付方式可选项（看板 /meta 与 AI 提示词共用）。
 
     枚举属于「数据事实」，只能在这里查一次。路由和提示词里重复写 DISTINCT 查询，
@@ -86,10 +95,10 @@ def dimensions(conn: sqlite3.Connection) -> dict:
 
 def _where(start: str, end: str, store_ids: list[str] | None, extra_sql: str = "") -> tuple[str, list]:
     """构造 WHERE 片段（参数化）。"""
-    parts = ["s.date >= ?", "s.date <= ?"]
+    parts = ["s.date >= %s", "s.date <= %s"]
     params: list = [start, end]
     if store_ids:
-        parts.append(f"s.store_id IN ({','.join('?' * len(store_ids))})")
+        parts.append(f"s.store_id IN ({','.join(['%s'] * len(store_ids))})")
         params.extend(store_ids)
     if extra_sql:
         parts.append(extra_sql)
@@ -103,23 +112,23 @@ def _round(row: dict, keys: tuple[str, ...]) -> dict:
     return row
 
 
-def resolve_stores(conn: sqlite3.Connection, keyword: str) -> list[dict]:
+def resolve_stores(conn: psycopg.Connection, keyword: str) -> list[dict]:
     like = f"%{keyword.strip()}%"
     rows = conn.execute(
         "SELECT store_id, store_name, category, district FROM stores "
-        "WHERE store_name LIKE ? OR category LIKE ? OR district LIKE ? "
+        "WHERE store_name LIKE %s OR category LIKE %s OR district LIKE %s "
         "ORDER BY store_id",
         (like, like, like),
     ).fetchall()
     return [dict(r) for r in rows]
 
 
-def resolve_products(conn: sqlite3.Connection, keyword: str) -> list[dict]:
+def resolve_products(conn: psycopg.Connection, keyword: str) -> list[dict]:
     """商品名模糊匹配：整词优先，无命中则分词逐个 OR。"""
     kw = keyword.strip()
     rows = conn.execute(
         "SELECT product_id, product_name, product_category, unit_price FROM products "
-        "WHERE product_name LIKE ? OR product_category LIKE ? ORDER BY product_id",
+        "WHERE product_name LIKE %s OR product_category LIKE %s ORDER BY product_id",
         (f"%{kw}%", f"%{kw}%"),
     ).fetchall()
     if rows:
@@ -130,7 +139,7 @@ def resolve_products(conn: sqlite3.Connection, keyword: str) -> list[dict]:
     tokens = [t for t in re.split(r"[\s,，/、]+", kw) if t]
     if not tokens:
         return []
-    clauses = " OR ".join(["product_name LIKE ?"] * len(tokens))
+    clauses = " OR ".join(["product_name LIKE %s"] * len(tokens))
     params = [f"%{t}%" for t in tokens]
     rows = conn.execute(
         f"SELECT product_id, product_name, product_category, unit_price FROM products "
@@ -142,20 +151,18 @@ def resolve_products(conn: sqlite3.Connection, keyword: str) -> list[dict]:
 
 # ---------- 指标聚合 ----------
 
-def summary(conn: sqlite3.Connection, start: str, end: str, store_ids: list[str] | None = None) -> dict:
+def summary(conn: psycopg.Connection, start: str, end: str, store_ids: list[str] | None = None) -> dict:
     """区间总览：营业额 / 订单数 / 客单价 + 按日序列 + 上一周期环比。"""
     where, params = _where(start, end, store_ids)
     row = conn.execute(
-        f"SELECT {REVENUE_SQL} AS revenue, {ORDERS_SQL} AS orders, "
-        f"ROUND(SUM(s.amount) * 1.0 / {ORDERS_SQL}, 2) AS aov "
+        f"SELECT {REVENUE_SQL} AS revenue, {ORDERS_SQL} AS orders, {AOV_SQL} AS aov "
         f"FROM sales s WHERE {where}",
         params,
     ).fetchone()
     by_day = [
         _round(dict(r), ("revenue", "aov"))
         for r in conn.execute(
-            f"SELECT s.date, {REVENUE_SQL} AS revenue, {ORDERS_SQL} AS orders, "
-            f"ROUND(SUM(s.amount) * 1.0 / {ORDERS_SQL}, 2) AS aov "
+            f"SELECT s.date, {REVENUE_SQL} AS revenue, {ORDERS_SQL} AS orders, {AOV_SQL} AS aov "
             f"FROM sales s WHERE {where} GROUP BY s.date ORDER BY s.date",
             params,
         ).fetchall()
@@ -166,8 +173,7 @@ def summary(conn: sqlite3.Connection, start: str, end: str, store_ids: list[str]
     prev_start = prev_end - timedelta(days=days - 1)
     pwhere, pparams = _where(prev_start.isoformat(), prev_end.isoformat(), store_ids)
     prev = conn.execute(
-        f"SELECT {REVENUE_SQL} AS revenue, {ORDERS_SQL} AS orders, "
-        f"ROUND(SUM(s.amount) * 1.0 / {ORDERS_SQL}, 2) AS aov "
+        f"SELECT {REVENUE_SQL} AS revenue, {ORDERS_SQL} AS orders, {AOV_SQL} AS aov "
         f"FROM sales s WHERE {pwhere}",
         pparams,
     ).fetchone()
@@ -201,33 +207,37 @@ def summary(conn: sqlite3.Connection, start: str, end: str, store_ids: list[str]
 
 
 def top_products(
-    conn: sqlite3.Connection, start: str, end: str, store_ids: list[str] | None = None, limit: int = 10
+    conn: psycopg.Connection, start: str, end: str, store_ids: list[str] | None = None, limit: int = 10
 ) -> list[dict]:
     where, params = _where(start, end, store_ids)
     rows = conn.execute(
         f"SELECT s.product_id, p.product_name AS name, p.product_category AS category, "
         f"p.unit_price, {REVENUE_SQL} AS revenue, {ORDERS_SQL} AS orders, {QTY_SQL} AS qty "
         f"FROM sales s JOIN products p ON p.product_id = s.product_id "
-        f"WHERE {where} GROUP BY s.product_id ORDER BY revenue DESC LIMIT ?",
+        f"WHERE {where} "
+        # PG 要求 SELECT 的非聚合列都在 GROUP BY（补齐 p.* 三列，分组数不变）
+        f"GROUP BY s.product_id, p.product_name, p.product_category, p.unit_price "
+        f"ORDER BY revenue DESC LIMIT %s",
         params + [limit],
     ).fetchall()
     return [_round(dict(r), ("revenue", "qty")) for r in rows]
 
 
-def store_comparison(conn: sqlite3.Connection, start: str, end: str) -> list[dict]:
+def store_comparison(conn: psycopg.Connection, start: str, end: str) -> list[dict]:
     where, params = _where(start, end, None)
     rows = conn.execute(
         f"SELECT s.store_id, st.store_name, st.category, st.district, "
-        f"{REVENUE_SQL} AS revenue, {ORDERS_SQL} AS orders, "
-        f"ROUND(SUM(s.amount) * 1.0 / {ORDERS_SQL}, 2) AS aov "
+        f"{REVENUE_SQL} AS revenue, {ORDERS_SQL} AS orders, {AOV_SQL} AS aov "
         f"FROM sales s JOIN stores st ON st.store_id = s.store_id "
-        f"WHERE {where} GROUP BY s.store_id ORDER BY revenue DESC",
+        f"WHERE {where} "
+        f"GROUP BY s.store_id, st.store_name, st.category, st.district "
+        f"ORDER BY revenue DESC",
         params,
     ).fetchall()
     return [_round(dict(r), ("revenue", "aov")) for r in rows]
 
 
-def category_comparison(conn: sqlite3.Connection, start: str, end: str, dim: str) -> list[dict]:
+def category_comparison(conn: psycopg.Connection, start: str, end: str, dim: str) -> list[dict]:
     """dim: store_category（门店品类）或 product_category（商品品类）。"""
     assert dim in ("store_category", "product_category")
     if dim == "store_category":
@@ -243,7 +253,7 @@ def category_comparison(conn: sqlite3.Connection, start: str, end: str, dim: str
     return [_round(dict(r), ("revenue",)) for r in rows]
 
 
-def anomalies(conn: sqlite3.Connection, start: str, end: str, z_threshold: float = 2.5) -> dict:
+def anomalies(conn: psycopg.Connection, start: str, end: str, z_threshold: float = 2.5) -> dict:
     """异常销售预警（同星期对比）：每家店每天只与**同为该星期几**的历史均值/标准差比。
 
     工作日与工作日比、周末与周末比——排除「周末天然火爆」这类周期性因素，
@@ -256,7 +266,8 @@ def anomalies(conn: sqlite3.Connection, start: str, end: str, z_threshold: float
     rows = conn.execute(
         f"SELECT s.date, s.store_id, st.store_name, {REVENUE_SQL} AS revenue "
         f"FROM sales s JOIN stores st ON st.store_id = s.store_id "
-        f"WHERE {where} GROUP BY s.date, s.store_id ORDER BY s.date, s.store_id",
+        f"WHERE {where} "
+        f"GROUP BY s.date, s.store_id, st.store_name ORDER BY s.date, s.store_id",
         params,
     ).fetchall()
     per_store: dict[str, list[tuple[str, str, str, float]]] = {}
@@ -301,7 +312,7 @@ def anomalies(conn: sqlite3.Connection, start: str, end: str, z_threshold: float
 
 
 def metrics_by(
-    conn: sqlite3.Connection,
+    conn: psycopg.Connection,
     start: str,
     end: str,
     granularity: str,
@@ -319,32 +330,35 @@ def metrics_by(
     params_extra: list = []
     joins = group_join
     if product_ids:
-        extra.append(f"s.product_id IN ({','.join('?' * len(product_ids))})")
+        extra.append(f"s.product_id IN ({','.join(['%s'] * len(product_ids))})")
         params_extra.extend(product_ids)
     if category:
         if granularity in ("store", "store_category"):
             if "JOIN stores" not in joins:
                 joins += " JOIN stores st ON st.store_id = s.store_id"
-            extra.append("st.category = ?")
+            extra.append("st.category = %s")
         else:
             if "JOIN products" not in joins:
                 joins += " JOIN products p ON p.product_id = s.product_id"
-            extra.append("p.product_category = ?")
+            extra.append("p.product_category = %s")
         params_extra.append(category)
 
     where, params = _where(start, end, store_ids, " AND ".join(extra) if extra else "")
     # _where 参数顺序 = [start, end, *store_ids]，extra 子句拼在其后，参数直接追加即可
     params.extend(params_extra)
 
-    label_sql = _GROUP_LABELS.get(granularity, "NULL")
+    # label 列同时进入 GROUP BY：PG 要求 SELECT 的非聚合列可被 GROUP BY 决定（SQLite 宽松）
+    label_col = _GROUP_LABELS.get(granularity)
+    label_sql = f"{label_col} AS label" if label_col else "NULL"
+    group_by_sql = f"{group_col}, {label_col}" if label_col else group_col
+
     order_sql = "s.date ASC" if order == "asc" else "revenue DESC"
     limit = max(1, min(int(limit), 50))
     rows = conn.execute(
         f"SELECT {group_col} AS grp, {label_sql}, "
-        f"{REVENUE_SQL} AS revenue, {ORDERS_SQL} AS orders, {QTY_SQL} AS qty, "
-        f"ROUND(SUM(s.amount) * 1.0 / {ORDERS_SQL}, 2) AS aov "
+        f"{REVENUE_SQL} AS revenue, {ORDERS_SQL} AS orders, {QTY_SQL} AS qty, {AOV_SQL} AS aov "
         f"FROM sales s {joins} WHERE {where} "
-        f"GROUP BY {group_col} ORDER BY {order_sql} LIMIT ?",
+        f"GROUP BY {group_by_sql} ORDER BY {order_sql} LIMIT %s",
         params + [limit],
     ).fetchall()
     result_rows = []
@@ -355,8 +369,7 @@ def metrics_by(
         result_rows.append(d)
 
     total = conn.execute(
-        f"SELECT {REVENUE_SQL} AS revenue, {ORDERS_SQL} AS orders, "
-        f"ROUND(SUM(s.amount) * 1.0 / {ORDERS_SQL}, 2) AS aov "
+        f"SELECT {REVENUE_SQL} AS revenue, {ORDERS_SQL} AS orders, {AOV_SQL} AS aov "
         f"FROM sales s {joins} WHERE {where}",
         params,
     ).fetchone()

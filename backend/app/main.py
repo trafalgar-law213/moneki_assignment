@@ -26,9 +26,13 @@ except ImportError:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # 启动时若数据库缺失则自动跑清洗管线（幂等，毫秒级）
-    if not dbmod.get_db_path().exists():
-        pipeline.run()
+    # 启动时若数据库未初始化（无 sales 表）则自动跑清洗管线（幂等，毫秒级）
+    conn = dbmod.get_conn()
+    try:
+        if not dbmod.is_initialized(conn):
+            pipeline.run()
+    finally:
+        conn.close()
     yield
 
 

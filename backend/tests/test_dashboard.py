@@ -6,12 +6,12 @@
 全量(07-01~07-08)：营业额 1185、订单 7、客单价 169.29
 """
 
-import sqlite3
-from pathlib import Path
-
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from psycopg.rows import dict_row
 
+import db_helpers
 from app import db as dbmod
 from app import query
 from app.main import app
@@ -111,21 +111,27 @@ def test_invalid_range_400():
 
 # ---------- 异常预警定向测试（独立临时库，精确构造数据） ----------
 
-def test_anomalies_weekday_aware(tmp_path):
+def test_anomalies_weekday_aware():
     """同星期对比（留一法）：周末天然火爆不误报；远超同星期六水平的日才报。
 
     2026-06-01 是周一。4 整周 + 周六/周日各补 1 天：工作日恒 100，
     周六 [1000,1010,990,1005,995]，周日 [900,915,885,910,890]（均匀分布，
     留一法下最极端点 |z|≤1.69，零误报）；07-11（周六）S01 冲 5000 → 只报这一天。
     """
-    db_path = tmp_path / "anomaly_weekday.db"
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    dsn, db_name = db_helpers.create_temp_db()
+    conn = psycopg.connect(dsn, row_factory=dict_row)
     dbmod.init_schema(conn)
-    conn.executemany(
-        "INSERT INTO stores(store_id, store_name, category, district) VALUES(?,?,?,?)",
-        [("S01", "测试店A", "拉面", "测试"), ("S02", "测试店B", "轻食", "测试")],
-    )
+    with conn.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO stores(store_id, store_name, category, district) VALUES(%s,%s,%s,%s)",
+            [("S01", "测试店A", "拉面", "测试"), ("S02", "测试店B", "轻食", "测试")],
+        )
+        # PG 强制外键（SQLite 默认不强制）：sales 引用的商品必须先存在
+        cur.executemany(
+            "INSERT INTO products(product_id, product_name, product_category, unit_price) "
+            "VALUES(%s,%s,%s,%s)",
+            [("P01", "测试商品", "主食", 100.0)],
+        )
     sat = {"2026-06-06": 1000.0, "2026-06-13": 1010.0, "2026-06-20": 990.0,
            "2026-06-27": 1005.0, "2026-07-04": 995.0}
     sun = {"2026-06-07": 900.0, "2026-06-14": 915.0, "2026-06-21": 885.0, "2026-06-28": 910.0}
@@ -144,11 +150,12 @@ def test_anomalies_weekday_aware(tmp_path):
     rows.append(("B-0705", "2026-07-05", "S02", "P01", 1, 890.0, "现金"))
     rows.append(("A-0711", "2026-07-11", "S01", "P01", 1, 5000.0, "现金"))  # 异常冲高
     rows.append(("B-0711", "2026-07-11", "S02", "P01", 1, 1000.0, "现金"))  # 正常周六水平
-    conn.executemany(
-        "INSERT INTO sales(order_id, date, store_id, product_id, qty, amount, payment) "
-        "VALUES(?,?,?,?,?,?,?)",
-        rows,
-    )
+    with conn.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO sales(order_id, date, store_id, product_id, qty, amount, payment) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s)",
+            rows,
+        )
     conn.commit()
 
     result = query.anomalies(conn, "2026-06-01", "2026-07-11")
@@ -163,6 +170,7 @@ def test_anomalies_weekday_aware(tmp_path):
     # 正常周六/周日（周期高峰）零误报；S02（含其正常周六）零误报
     assert all(d["store_id"] != "S02" for d in result["days"])
     conn.close()
+    db_helpers.drop_temp_db(db_name)
 
 
 # ---------- 取数层纯函数 ----------

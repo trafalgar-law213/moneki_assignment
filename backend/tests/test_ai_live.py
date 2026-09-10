@@ -10,11 +10,11 @@ import asyncio
 import json
 import os
 import re
-import tempfile
 from pathlib import Path
 
 import pytest
 
+import db_helpers
 from app import db as dbmod
 from app import pipeline
 from app import query
@@ -30,14 +30,14 @@ _DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
 @pytest.fixture(scope="module", autouse=True)
 def real_db():
-    """真实数据临时库；结束恢复原 APP_DB_PATH，不影响其他测试文件的夹具库。"""
-    tmp = Path(tempfile.mkdtemp(prefix="moneki_live_"))
-    db_path = tmp / "real.db"
-    pipeline.run(data_dir=_DATA_DIR, db_path=db_path)
-    old = os.environ.get("APP_DB_PATH")
-    os.environ["APP_DB_PATH"] = str(db_path)
-    yield db_path
-    os.environ["APP_DB_PATH"] = old
+    """真实数据临时 PG 库；结束恢复原 DATABASE_URL，不影响其他测试文件的夹具库。"""
+    dsn, name = db_helpers.create_temp_db()
+    pipeline.run(data_dir=_DATA_DIR, dsn=dsn)
+    old = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = dsn
+    yield dsn
+    os.environ["DATABASE_URL"] = old
+    db_helpers.drop_temp_db(name)
 
 
 def _nums(text: str) -> set[float]:

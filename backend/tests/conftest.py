@@ -1,18 +1,18 @@
-"""测试基建：构造脏数据夹具 CSV → 跑清洗管线 → 注入临时 SQLite。
+"""测试基建：构造脏数据夹具 CSV → 跑清洗管线 → 注入临时 PG 库。
 
-所有测试共享同一个 session 级测试库（只读使用），APP_DB_PATH 在
+所有测试共享同一个 session 级测试库（只读使用），DATABASE_URL 在
 import app 之前就位（模块级设置），保证 api/ai 模块拿到测试库。
 """
 
 import os
-import tempfile
-from pathlib import Path
 
 import pytest
 
+from db_helpers import create_temp_db, drop_temp_db
+
 # 模块级：必须在任何 `import app.*` 之前设置
-_TEST_DIR = Path(tempfile.mkdtemp(prefix="moneki_test_"))
-os.environ["APP_DB_PATH"] = str(_TEST_DIR / "test.db")
+_TEST_DSN, _TEST_DB_NAME = create_temp_db()
+os.environ["DATABASE_URL"] = _TEST_DSN
 
 DIRTY_STORES_CSV = """store_id,store_name,category,district
 S01,人民广场店,拉面,上海·黄浦
@@ -47,8 +47,8 @@ ORD11,2026/07/08,S02,P01,"¥ 2","1,000.00",微信
 
 
 @pytest.fixture(scope="session", autouse=True)
-def test_db(tmp_path_factory) -> dict:
-    """建一次测试库，全部测试共享。返回 report 与夹具 CSV 目录。"""
+def test_db(tmp_path_factory):
+    """建一次测试库，全部测试共享。返回 report 与夹具 CSV 目录；结束时删临时库。"""
     from app import pipeline
 
     csv_dir = tmp_path_factory.mktemp("csv")
@@ -56,5 +56,6 @@ def test_db(tmp_path_factory) -> dict:
     (csv_dir / "products.csv").write_text(DIRTY_PRODUCTS_CSV, encoding="utf-8")
     (csv_dir / "sales.csv").write_text(DIRTY_SALES_CSV, encoding="utf-8")
 
-    report = pipeline.run(data_dir=csv_dir, db_path=Path(os.environ["APP_DB_PATH"]))
-    return {"report": report, "data_dir": csv_dir}
+    report = pipeline.run(data_dir=csv_dir)
+    yield {"report": report, "data_dir": csv_dir}
+    drop_temp_db(_TEST_DB_NAME)

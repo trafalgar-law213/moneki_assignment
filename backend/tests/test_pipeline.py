@@ -1,8 +1,5 @@
 """数据清洗管线单元测试：8 类脏数据处理规则逐一断言。"""
 
-import os
-from pathlib import Path
-
 import pytest
 
 from app import db as dbmod
@@ -145,6 +142,6 @@ def test_idempotent_rerun(env):
     """重复执行结果一致（幂等重建）。"""
     conn = dbmod.get_conn()
     before = conn.execute("SELECT COUNT(*) AS n FROM sales").fetchone()["n"]
-    report2 = pipeline.run(data_dir=env["data_dir"], db_path=Path(os.environ["APP_DB_PATH"]))
+    report2 = pipeline.run(data_dir=env["data_dir"])
     after = conn.execute("SELECT COUNT(*) AS n FROM sales").fetchone()["n"]
     assert before == after == report2["db"]["sales_rows"]
