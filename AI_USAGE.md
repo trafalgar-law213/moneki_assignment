@@ -49,6 +49,7 @@ Step 1 骨架+数据副本 → Step 2 数据清洗管线(27测试) → Step 3 �
 - **LLM 不直接碰 SQL 和原始数据**：它只产出结构化参数，SQL 由后端白名单拼装；工具层只返回聚合结果，全链路没有返回原始行的工具。
 - **数字一致性由架构保证**：AI 工具与看板 API 共用 `query.py` 同一套查询函数 → AI 回答的数字 = 看板数字。
 - **思考模式**：DeepSeek V4 Pro 的 reasoning_content 经 `thinking` 事件流式透出到前端（可折叠展示），带工具调用的消息必须回传 reasoning_content。
+- **跨会话记忆**：每次问答自动向量化入库（pgvector + bge-small-zh），「历史问答」面板可语义检索；历史答案**不进入数字链路**（数字必须来自本次查询，避免绕过对账口径）。
 
 ## 三、真实系统提示词（全文见 backend/app/api/chat.py build_system，此处为铁律部分）
 

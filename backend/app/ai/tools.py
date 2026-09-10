@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-import sqlite3
+import psycopg
 
 from .. import query
 
@@ -80,16 +80,16 @@ TOOL_DEFS = [QUERY_METRICS_DEF, QUERY_TOP_PRODUCTS_DEF, RESOLVE_PRODUCTS_DEF]
 
 # ---------- 工具实现 ----------
 
-def _range(conn: sqlite3.Connection, args: dict) -> tuple[str, str]:
+def _range(conn: psycopg.Connection, args: dict) -> tuple[str, str]:
     bounds = query.data_bounds(conn)
     return query.validate_range(args["start_date"], args["end_date"], bounds["date_min"], bounds["date_max"])
 
 
-def _all_stores(conn: sqlite3.Connection) -> list[dict]:
+def _all_stores(conn: psycopg.Connection) -> list[dict]:
     return [dict(r) for r in conn.execute("SELECT store_id, store_name FROM stores ORDER BY store_id")]
 
 
-def tool_query_metrics(conn: sqlite3.Connection, args: dict) -> dict:
+def tool_query_metrics(conn: psycopg.Connection, args: dict) -> dict:
     try:
         start, end = _range(conn, args)
     except ValueError as exc:
@@ -126,7 +126,7 @@ def tool_query_metrics(conn: sqlite3.Connection, args: dict) -> dict:
     }
 
 
-def tool_query_top_products(conn: sqlite3.Connection, args: dict) -> dict:
+def tool_query_top_products(conn: psycopg.Connection, args: dict) -> dict:
     try:
         start, end = _range(conn, args)
     except ValueError as exc:
@@ -148,7 +148,7 @@ def tool_query_top_products(conn: sqlite3.Connection, args: dict) -> dict:
     }
 
 
-def tool_resolve_products(conn: sqlite3.Connection, args: dict) -> dict:
+def tool_resolve_products(conn: psycopg.Connection, args: dict) -> dict:
     hits = query.resolve_products(conn, args["keyword"])
     return {
         "ok": True,
@@ -165,7 +165,7 @@ TOOL_IMPL = {
 }
 
 
-def run_tool(name: str, args: dict, conn: sqlite3.Connection) -> dict:
+def run_tool(name: str, args: dict, conn: psycopg.Connection) -> dict:
     """执行工具；任何异常都转成结构化错误（让模型如实说明，不编造）。"""
     impl = TOOL_IMPL.get(name)
     if impl is None:

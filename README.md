@@ -18,6 +18,7 @@ cd backend
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+python scripts/download_model.py # 可选：本地 embedding 模型（~95MB，跨会话语义检索用；不下载则该功能降级）
 cp .env.example .env             # 填入 DEEPSEEK_API_KEY（AI 问答需要；不填则只有看板可用）
 uvicorn app.main:app --port 8000 # 启动时若库未初始化则自动清洗 data/*.csv 建库（幂等），并托管前端构建产物
 
@@ -58,6 +59,7 @@ docker compose up -d --build
 - 自然语言问数据 → LLM 出工具参数 → 后端白名单 SQL 真查库 → 流式回答（思考过程可见）
 - 追问上下文（"那五月呢？"）；查不到如实说"数据里没有"，绝不编造
 - 图表联动：AI 查询的区间自动同步到看板；「✨ 让 AI 给经营建议」一键调用
+- **跨会话记忆**：每次问答自动向量化入库（pgvector），右侧「历史问答」面板可语义检索——换种问法也能找回
 
 ## 架构（依赖单向，模块解耦）
 
@@ -100,6 +102,7 @@ cd backend && .venv/bin/pytest tests/ -q                     # Linux/macOS
 | FastAPI + PostgreSQL | v1 原型用 SQLite（零运维、单文件）；v2 迁 PostgreSQL——pgvector 向量能力 + 生产化（多实例/并发/备份），见「数据库演进」 |
 | React 18(Vite) + ECharts | 业界主流栈；ECharts 双轴图开箱即用 |
 | 手写 CSS 深色主题 | 纯手写、不套组件库，审美与视觉工程完整可控 |
+| 本地 embedding（bge-small-zh + ONNX） | 中文语义质量好、CPU 推理快；自实现推理免 torch 重依赖；模型经 ModelScope 获取适配国内网络 |
 | DeepSeek V4 Pro + function calling | 结构化工具调用：LLM 只出参数，SQL 由后端白名单拼装+参数化绑定，防注入、可测试 |
 | SSE 流式 | 首字秒回 + 思考过程透明，体验好且实现稳 |
 | 单容器部署（FastAPI 托管 dist） | 3 小时窗口内最少翻车点；README 已写清取舍 |
@@ -112,6 +115,16 @@ cd backend && .venv/bin/pytest tests/ -q                     # Linux/macOS
 | v2（当前） | PostgreSQL | ① pgvector 向量能力（RAG 的基础设施，SQLite 没有）；② 生产化：多实例部署共享数据、并发写入、备份与高可用 |
 
 迁移是真实的工程动作，实际替换的内容：连接层（sqlite3 → psycopg）、值占位符方言（`?` → `%s`）、`ROUND(double, 2)` 经 `NUMERIC` 中转（PG 无此重载）。**PG 的严格性还暴露了两处被 SQLite 宽容掩盖的写法**：GROUP BY 必须覆盖 SELECT 的全部非聚合列；外键默认强制（定向测试因此补出一处数据完整性缺口）。迁移的安全网是既有测试：65 个全绿即迁移成功的证明。
+
+**pgvector 已落地**：问答历史表（qa_history）用 bge-small-zh 向量做语义检索，见下节。
+
+## 跨会话记忆（语义检索）
+
+会话内记忆（追问"那五月呢"）由前端回传历史实现；**跨会话**由服务端补：每次问答自动向量化入库（pgvector），右侧「历史问答」面板可按语义检索——换种问法也能命中（实测同义提问相似度 0.99，无关提问 0.25）。
+
+- 向量方案：bge-small-zh-v1.5，ONNX 自实现推理（onnxruntime + tokenizers，不引入 torch 重依赖）；模型经 ModelScope 获取（适配国内网络），见 `backend/scripts/download_model.py`
+- **设计取舍：历史答案不进入 AI 的数字链路**——数字必须来自「本次查询的工具结果」；历史仅服务用户自查与展示（让 AI 直接引用历史答案会绕过"数字来自本次查询"的对账口径）
+- 降级策略：模型缺失时该功能静默关闭（接口返回 503），问答主链路不受影响（有测试守护）
 
 ## 数据策略（四层隔离，数据内容不进 AI 上下文）
 

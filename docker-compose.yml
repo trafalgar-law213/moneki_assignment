@@ -3,7 +3,8 @@
 # PG 密码：默认仅本地开发用；生产用环境变量覆盖——POSTGRES_PASSWORD=强密码 docker compose up -d
 services:
   db:
-    image: postgres:16
+    # pgvector 版镜像：自带 vector 扩展（问答历史的语义检索用），用法与 postgres:16 完全一致
+    image: pgvector/pgvector:pg16
     container_name: pokeone-db
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pokeone_dev}

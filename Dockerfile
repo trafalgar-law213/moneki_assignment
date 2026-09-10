@@ -15,6 +15,8 @@ COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 COPY backend/ ./
 COPY data/ ./data/
+# 本地 embedding 模型（backend/models/）需在构建前用 backend/scripts/download_model.py 下载；
+# 缺失时应用正常启动，仅「历史问答 · 语义检索」功能降级不可用
 # main.py 以 parent.parent.parent / frontend/dist 解析静态目录，容器内即 /frontend/dist
 COPY --from=fe /fe/dist /frontend/dist
 # pipeline 默认数据目录按 REPO_ROOT(=容器根)/data 解析，覆盖到 CSV 实际所在 /app/data
